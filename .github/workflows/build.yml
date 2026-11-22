@@ -3,6 +3,9 @@ name: iPhone-App bauen
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "pc-app/**"
+      - ".github/workflows/pc-app.yml"
   workflow_dispatch:
 
 permissions:

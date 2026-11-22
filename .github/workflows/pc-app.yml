@@ -1,0 +1,68 @@
+name: PC-App bauen
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pc-app/**"
+      - ".github/workflows/pc-app.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: pc-app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Pakete installieren
+        run: python -m pip install --upgrade pip send2trash pyinstaller
+
+      - name: Selbsttest (Python, echtes Windows)
+        run: python main.py --selftest
+
+      - name: "Echter Scan der Festplatte C:"
+        timeout-minutes: 25
+        run: python realscan.py
+
+      - name: EXE bauen
+        run: >
+          pyinstaller --noconfirm --onefile --windowed
+          --name "PC-Aufraeumen"
+          --icon assets/icon.ico
+          --add-data "ui;ui"
+          --hidden-import selftest
+          main.py
+
+      - name: Selbsttest mit der fertigen EXE
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\PC-Aufraeumen.exe" -ArgumentList "--selftest" -Wait -PassThru
+          Write-Host "Exit-Code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { exit 1 }
+          Get-Item dist\PC-Aufraeumen.exe | Select-Object Name, Length
+
+      - name: Hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: PC-Aufraeumen
+          path: pc-app/dist/PC-Aufraeumen.exe
+
+      - name: Als Release veröffentlichen
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: pc-${{ github.run_number }}
+          name: PC aufräumen – Version ${{ github.run_number }}
+          files: pc-app/dist/PC-Aufraeumen.exe
+          body: |
+            **PC-Aufraeumen.exe** herunterladen und doppelklicken – fertig, nichts zu installieren.
+            Windows warnt beim ersten Start („Der Computer wurde durch Windows geschützt“): auf **Weitere Informationen → Trotzdem ausführen** klicken.
