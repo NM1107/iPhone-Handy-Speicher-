@@ -66,6 +66,7 @@ def build_tree(root: Path) -> dict:
         # gleiche .dll nochmal in einem normalen Ordner: darf NICHT als Duplikat auftauchen
         "dll_copy": make_file(user / "Documents" / "helfer.dll", 2 * MB, same_dll),
         "old_jar": make_file(user / "Documents" / "alt" / "spiel-mod.jar", 5 * MB, age_days=1500),
+        "dotfolder": make_file(user / ".minecraft" / "saves" / "welt.zip", 700 * MB),
         "pak_alone": make_file(root / "Spiele" / "Irgendwas" / "Content" / "riesig.pak", 900 * MB),
     }
     paths["zip_dir"].mkdir(parents=True, exist_ok=True)
@@ -105,12 +106,12 @@ def run() -> int:
         dl = root / "Users" / "Nevio" / "Downloads"
 
         print("== Scan ==")
-        sc = core.Scanner(data_dir=data, roots=[str(root)], downloads=dl)
+        sc = core.Scanner(data_dir=data, roots=[str(root)], downloads=dl, system_root="")
         sc.run_blocking()
         check(sc.state.phase == "done", f"Scan fertig (Phase {sc.state.phase}, {sc.state.error})", errors)
         seen = {f.path for f in sc.files}
         for key in ("appdata", "progfiles", "windows", "game_pak", "game_marker", "steam", "lnk",
-                    "tool_exe", "tool_dll", "dll_copy", "old_jar", "pak_alone"):
+                    "tool_exe", "tool_dll", "dll_copy", "old_jar", "pak_alone", "dotfolder"):
             check(str(p[key]) not in seen, f"Geschützt/ignoriert: {p[key].relative_to(root)}", errors)
         check(not any("Link-zu-AppData" in s for s in seen), "Verknüpfungen werden nicht verfolgt", errors)
 
@@ -128,11 +129,22 @@ def run() -> int:
         check(items["Aufnahme.mp4"]["verdict"] == "check", "Video = „Selbst prüfen“", errors)
         check(items["Lebenslauf (Kopie).pdf"]["verdict"] == "go" and "Documents" in items["Lebenslauf (Kopie).pdf"]["hint"], "Duplikat nennt Ort des Originals", errors)
 
+        print("== Windows-Laufwerk: nur Benutzerordner ==")
+        make_file(root / "Werkzeug" / "abbild.iso", 600 * MB)
+        sys_sc = core.Scanner(data_dir=data, roots=[str(root)], downloads=dl, system_root=str(root))
+        sys_sc.run_blocking()
+        sys_paths = {f.path for f in sys_sc.files}
+        check(not any(os.sep + "Werkzeug" + os.sep in x for x in sys_paths), "Auf dem Windows-Laufwerk wird außerhalb von Users nichts angeboten", errors)
+        check(any("Downloads" in x for x in sys_paths), "…der Benutzerordner aber schon", errors)
+        check(not sys_sc.is_safe_path(str(root / "Werkzeug" / "abbild.iso")), "Sicherheitsnetz lehnt Dateien außerhalb von Users ab", errors)
+        check(sys_sc.is_safe_path(str(p["installer"])), "Sicherheitsnetz erlaubt Downloads", errors)
+        os.remove(root / "Werkzeug" / "abbild.iso")
+
         print("== Behalten merken ==")
         iso_id = items["Win11_German_x64.iso"]["id"]
         sc.keep(iso_id)
         check("Win11_German_x64.iso" not in names("big"), "Behaltenes taucht nicht mehr auf", errors)
-        sc2 = core.Scanner(data_dir=data, roots=[str(root)], downloads=dl)
+        sc2 = core.Scanner(data_dir=data, roots=[str(root)], downloads=dl, system_root="")
         sc2.run_blocking()
         check("Win11_German_x64.iso" not in {i["name"] for i in sc2.items("big")}, "…auch nach Neustart", errors)
         sc.unkeep(iso_id)

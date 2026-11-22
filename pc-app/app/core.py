@@ -67,7 +67,7 @@ SKIP_ANY_DIRS = {
     "$recycle.bin", "system volume information", ".git", "node_modules",
 }
 # Unter C:\Users übersprungen
-SKIP_ANY_DIRS |= {"site-packages", "__pycache__", ".venv", "venv", "pkgs", "libexec", ".gradle",
+SKIP_ANY_DIRS |= {"include", "site-packages", "__pycache__", ".venv", "venv", "pkgs", "libexec", ".gradle",
                   ".m2", ".nuget", ".cargo", ".rustup", ".conda", "miniconda3", "anaconda3"}
 SKIP_USER_DIRS = {"default", "default user", "all users"}
 
@@ -239,13 +239,17 @@ class KeptStore:
 
 class Scanner:
     def __init__(self, data_dir: Path | None = None, roots: list[str] | None = None,
-                 downloads: Path | None = None, now: float | None = None):
+                 downloads: Path | None = None, now: float | None = None,
+                 system_root: str | None = None):
         self.state = ScanState()
         self.lock = threading.RLock()
         self.roots = roots
         self.downloads = Path(downloads) if downloads else winsys.downloads_folder()
         self.kept = KeptStore(data_dir or winsys.app_data_dir())
         self.now = now
+        # Auf dem Windows-Laufwerk wird nur der Benutzer-Bereich (C:\\Users) durchsucht
+        sysroot = system_root if system_root is not None else (winsys.windows_dir().anchor if winsys.IS_WINDOWS else "")
+        self.system_root = self._norm(sysroot) if sysroot else ""
         self.files: list[FileEntry] = []
         self.by_id: dict[int, dict] = {}
         self.programs: list[dict] = []
@@ -262,7 +266,10 @@ class Scanner:
 
     def _skip_dir(self, path: str, name: str, depth: int) -> bool:
         lname = name.lower()
-        if lname in SKIP_ANY_DIRS:
+        if lname in SKIP_ANY_DIRS or lname.startswith("."):
+            return True
+        if depth == 0 and self.system_root and lname != "users" and \
+                self._norm(os.path.dirname(path)).rstrip("\\/") == self.system_root.rstrip("\\/"):
             return True
         if lname in SKIP_USER_DIRS and os.path.basename(os.path.dirname(path)).lower() == "users":
             return True
@@ -577,6 +584,11 @@ class Scanner:
             return False  # außerhalb der gescannten Laufwerke: nie
         if rel_parts[0] in SKIP_TOP_DIRS or rel_parts[0].startswith("$"):
             return False
+        if self.system_root and normed.startswith(self.system_root.rstrip("\\/") + os.sep) and \
+                len(rel_parts) > 1 and rel_parts[0] != "users":
+            return False
+        if any(d.startswith(".") for d in rel_parts[:-1]):
+            return False
         dirs = rel_parts[:-1]
         if any(d in SKIP_ANY_DIRS for d in dirs):
             return False
@@ -746,6 +758,7 @@ def junk_locations() -> list[dict]:
         ("Grafik-Shader-Cache", [la / "D3DSCache", la / "NVIDIA" / "DXCache", la / "NVIDIA" / "GLCache",
                                  la / "AMD" / "DxCache", la / "AMD" / "DxcCache", pd / "NVIDIA Corporation" / "NV_Cache"]),
         ("Browser-Cache", browser_caches(la)),
+        ("Entpackte Treiber-Installer", [Path(win.anchor or "C:\\") / "AMD", Path(win.anchor or "C:\\") / "NVIDIA"]),
         ("Absturzberichte", [la / "CrashDumps", pd / "Microsoft" / "Windows" / "WER" / "ReportArchive",
                              pd / "Microsoft" / "Windows" / "WER" / "ReportQueue"]),
     ]
