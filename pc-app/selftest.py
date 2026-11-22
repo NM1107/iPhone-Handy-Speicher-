@@ -40,6 +40,7 @@ def build_tree(root: Path) -> dict:
     user = root / "Users" / "Nevio"
     dl = user / "Downloads"
     same = os.urandom(3 * MB)
+    same_dll = os.urandom(2 * MB)
     paths = {
         "installer": make_file(dl / "setup_tool.exe", 2 * MB),
         "iso": make_file(dl / "Win11_German_x64.iso", 600 * MB),
@@ -59,6 +60,13 @@ def build_tree(root: Path) -> dict:
         "game_marker": make_file(root / "Games" / "MeinSpiel" / "unins000.exe", 1000),
         "steam": make_file(root / "SteamLibrary" / "steamapps" / "common" / "X" / "x.pak", 900 * MB),
         "lnk": make_file(user / "Desktop" / "Spiel.lnk", 2000),
+        # Programm ohne Registry-Eintrag direkt auf dem Laufwerk (exe + dll)
+        "tool_exe": make_file(root / "Tools" / "MeinTool" / "tool.exe", 600 * MB),
+        "tool_dll": make_file(root / "Tools" / "MeinTool" / "helfer.dll", 2 * MB, same_dll),
+        # gleiche .dll nochmal in einem normalen Ordner: darf NICHT als Duplikat auftauchen
+        "dll_copy": make_file(user / "Documents" / "helfer.dll", 2 * MB, same_dll),
+        "old_jar": make_file(user / "Documents" / "alt" / "spiel-mod.jar", 5 * MB, age_days=1500),
+        "pak_alone": make_file(root / "Spiele" / "Irgendwas" / "Content" / "riesig.pak", 900 * MB),
     }
     paths["zip_dir"].mkdir(parents=True, exist_ok=True)
     # Verknüpfung auf AppData darf nicht verfolgt werden
@@ -101,7 +109,8 @@ def run() -> int:
         sc.run_blocking()
         check(sc.state.phase == "done", f"Scan fertig (Phase {sc.state.phase}, {sc.state.error})", errors)
         seen = {f.path for f in sc.files}
-        for key in ("appdata", "progfiles", "windows", "game_pak", "game_marker", "steam", "lnk"):
+        for key in ("appdata", "progfiles", "windows", "game_pak", "game_marker", "steam", "lnk",
+                    "tool_exe", "tool_dll", "dll_copy", "old_jar", "pak_alone"):
             check(str(p[key]) not in seen, f"Geschützt/ignoriert: {p[key].relative_to(root)}", errors)
         check(not any("Link-zu-AppData" in s for s in seen), "Verknüpfungen werden nicht verfolgt", errors)
 
@@ -134,6 +143,7 @@ def run() -> int:
         check(not sc.is_safe_path(str(p["windows"])), "Windows-Pfad wird beim Löschen abgelehnt", errors)
         check(sc.is_safe_path(str(p["installer"])), "Downloads-Pfad ist erlaubt", errors)
         check(not sc.is_safe_path(str(p["progfiles"])), "Programme-Pfad wird beim Löschen abgelehnt", errors)
+        check(not sc.is_safe_path(str(p["dll_copy"])), "Programmdatei (.dll) wird beim Löschen abgelehnt", errors)
         check(not sc.is_safe_path(str(p["steam"])), "Steam-Bibliothek wird beim Löschen abgelehnt", errors)
         check(not sc.is_safe_path(os.path.join(tmp, "anderswo", "datei.txt")), "Pfad außerhalb der Laufwerke wird abgelehnt", errors)
         fake = sc._register({"type": "file", "path": str(p["appdata"]), "name": "cache.bin", "kind": "file"})

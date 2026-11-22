@@ -41,6 +41,15 @@ ARCHIVE_EXT = {".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz"}
 DISK_IMAGE_EXT = {".iso", ".img", ".vhd", ".vhdx", ".dmg"}
 LEFTOVER_EXT = {".tmp", ".temp", ".dmp", ".old", ".bak", ".crdownload", ".part", ".partial", ".download"}
 SKIP_FILE_EXT = {".lnk", ".url", ".sys"}
+# Dateien, aus denen Programme/Spiele bestehen. Die werden NIE angeboten
+# (Ausnahme: .exe/.msi-Installer in Downloads/Desktop – siehe is_program_file).
+PROGRAM_FILE_EXT = {
+    ".exe", ".dll", ".sys", ".lib", ".pyd", ".jar", ".so", ".node", ".pak", ".dat", ".bin",
+    ".cab", ".msp", ".ocx", ".drv", ".mui", ".cat", ".manifest", ".pdb", ".a", ".o", ".class",
+    ".pyc", ".asar", ".bundle", ".assets", ".resource", ".ucas", ".utoc", ".vpk", ".forge",
+    ".rpf", ".big", ".wad", ".bsa", ".ba2", ".esm", ".esp", ".xpak", ".ff", ".bdt", ".pck",
+    ".obb", ".dylib", ".vdf", ".acf", ".db", ".sqlite", ".ldb", ".mdb", ".edb", ".jrs",
+}
 SKIP_FILE_NAMES = {"desktop.ini", "thumbs.db", "pagefile.sys", "hiberfil.sys", "swapfile.sys", "dumpstack.log", "dumpstack.log.tmp", "ntuser.dat"}
 
 # Ordner direkt unter einem Laufwerk, die tabu sind
@@ -58,6 +67,8 @@ SKIP_ANY_DIRS = {
     "$recycle.bin", "system volume information", ".git", "node_modules",
 }
 # Unter C:\Users übersprungen
+SKIP_ANY_DIRS |= {"site-packages", "__pycache__", ".venv", "venv", "pkgs", "libexec", ".gradle",
+                  ".m2", ".nuget", ".cargo", ".rustup", ".conda", "miniconda3", "anaconda3"}
 SKIP_USER_DIRS = {"default", "default user", "all users"}
 
 # Liegt eine dieser Dateien/Ordner in einem Ordner, gehört er zu einem Spiel
@@ -352,7 +363,7 @@ class Scanner:
                         entries = list(it)
                 except OSError:
                     continue
-                if depth > 0 and PROGRAM_MARKERS & {e.name.lower() for e in entries}:
+                if depth > 0 and looks_like_program_folder(entries, self._norm(folder) == downloads_norm):
                     continue  # Spiel-/Programmordner: nicht einzeln anfassen
                 for entry in entries:
                     try:
@@ -380,6 +391,8 @@ class Scanner:
                             continue
                         normed = self._norm(entry.path)
                         in_dl = normed.startswith(downloads_norm + os.sep)
+                        if is_program_file(ext, in_dl, normed):
+                            continue
                         self.state.files_seen += 1
                         self.state.bytes_seen += st.st_size
                         files.append(FileEntry(entry.path, st.st_size, st.st_mtime, ext, in_dl))
@@ -571,6 +584,9 @@ class Scanner:
             return False
         if os.path.basename(normed) in SKIP_FILE_NAMES:
             return False
+        in_dl = normed.startswith(self._norm(str(self.downloads)) + os.sep)
+        if is_program_file(os.path.splitext(normed)[1], in_dl, normed):
+            return False
         return not any(normed.startswith(prefix + os.sep) for prefix in self.skip_prefixes)
 
     def mark_program_removed(self, item_id: int) -> None:
@@ -611,6 +627,27 @@ def judge(f: FileEntry, category: str, now: float) -> tuple[str, str]:
 
 
 _BLOCK_RE = None
+
+
+def looks_like_program_folder(entries: list, is_downloads: bool) -> bool:
+    """Ein Ordner mit .exe UND .dll (oder einem Marker) ist ein Programm/Spiel."""
+    names = {e.name.lower() for e in entries}
+    if PROGRAM_MARKERS & names:
+        return True
+    if is_downloads:
+        return False
+    has_exe = any(n.endswith(".exe") for n in names)
+    has_dll = any(n.endswith(".dll") for n in names)
+    return has_exe and has_dll
+
+
+def is_program_file(ext: str, in_downloads: bool, normed_path: str) -> bool:
+    """Programmdateien nie anbieten – außer Installer im Downloads-Ordner/Desktop."""
+    if ext not in PROGRAM_FILE_EXT:
+        return False
+    if ext in INSTALLER_EXT and (in_downloads or f"{os.sep}desktop{os.sep}" in normed_path):
+        return False
+    return True
 
 
 def is_blocked_program(name: str) -> bool:
