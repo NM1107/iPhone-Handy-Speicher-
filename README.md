@@ -7,6 +7,7 @@ Unten tippst du links auf **Behalten** und rechts auf **Löschen**.
 
 - Fotos groß anzeigen, Videos direkt abspielen (auch aus iCloud)
 - **Behalten** (links) / **Löschen** (rechts), dazu ein Knopf für **Rückgängig**
+- **Wischen:** nach links = Behalten, nach rechts = Löschen (im Menü umdrehbar). Videos: antippen = Pause/Weiter
 - Zum Löschen Markiertes wird gesammelt. Oben auf den roten Papierkorb tippen,
   dann fragt iOS **einmal** für alle zusammen
 - Merkt sich, was du schon angeschaut hast, und macht beim nächsten Start dort weiter

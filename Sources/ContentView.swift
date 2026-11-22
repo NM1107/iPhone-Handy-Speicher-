@@ -90,6 +90,11 @@ private struct AccessView: View {
 
 private struct ReviewView: View {
     @EnvironmentObject private var model: LibraryModel
+    @State private var dragOffset: CGSize = .zero
+    @State private var flying = false
+    @State private var passedThreshold = false
+
+    static let threshold: CGFloat = 110
 
     var body: some View {
         VStack(spacing: 10) {
@@ -105,10 +110,8 @@ private struct ReviewView: View {
                         Text("Galerie wird geladen …")
                             .foregroundStyle(.secondary)
                     }
-                } else if let asset = model.current {
-                    AssetView(asset: asset)
-                        .id(asset.localIdentifier)
-                        .clipShape(RoundedRectangle(cornerRadius: 20))
+                } else if model.current != nil {
+                    CardStack(dragOffset: $dragOffset, onDragEnded: dragEnded, onDragChanged: dragChanged)
                 } else {
                     DoneView()
                 }
@@ -119,11 +122,148 @@ private struct ReviewView: View {
                 InfoLine(asset: asset)
             }
 
-            DecisionButtons()
+            DecisionButtons(isBusy: flying) { keep in
+                decide(keep: keep)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.top, 4)
         .padding(.bottom, 8)
+    }
+
+    private func dragChanged(_ translation: CGSize) {
+        guard !flying else { return }
+        dragOffset = CGSize(width: translation.width, height: translation.height * 0.15)
+        let passed = abs(translation.width) > Self.threshold
+        if passed != passedThreshold {
+            passedThreshold = passed
+            if passed { haptic(.soft) }
+        }
+    }
+
+    private func dragEnded(_ translation: CGSize, _ predicted: CGSize) {
+        guard !flying else { return }
+        passedThreshold = false
+        let width = abs(translation.width) > Self.threshold ? translation.width
+            : (abs(predicted.width) > 320 ? predicted.width : 0)
+        if width == 0 {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.72)) {
+                dragOffset = .zero
+            }
+            return
+        }
+        let draggedLeft = width < 0
+        let keep = draggedLeft == model.swipeLeftKeeps
+        decide(keep: keep)
+    }
+
+    /// Karte zur passenden Seite rausfliegen lassen, dann entscheiden.
+    private func decide(keep: Bool) {
+        guard !flying, model.current != nil, !model.isLoading else { return }
+        flying = true
+        haptic(keep ? .light : .medium)
+        let toLeft = keep == model.swipeLeftKeeps
+        let distance = UIScreen.main.bounds.width + 250
+        withAnimation(.easeIn(duration: 0.2)) {
+            dragOffset = CGSize(width: toLeft ? -distance : distance, height: dragOffset.height)
+        }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                dragOffset = .zero
+                if keep {
+                    model.keep()
+                } else {
+                    model.markForDeletion()
+                }
+            }
+            flying = false
+        }
+    }
+}
+
+/// Oberste Karte zum Wischen, die nächste liegt dahinter und lädt schon vor.
+private struct CardStack: View {
+    @EnvironmentObject private var model: LibraryModel
+    @Binding var dragOffset: CGSize
+    let onDragEnded: (CGSize, CGSize) -> Void
+    let onDragChanged: (CGSize) -> Void
+
+    private struct Item: Identifiable {
+        let asset: PHAsset
+        let isTop: Bool
+        var id: String { asset.localIdentifier }
+    }
+
+    private var items: [Item] {
+        let upcoming = Array(model.queue.prefix(2))
+        var list: [Item] = []
+        if upcoming.count > 1 { list.append(Item(asset: upcoming[1], isTop: false)) }
+        if let first = upcoming.first { list.append(Item(asset: first, isTop: true)) }
+        return list
+    }
+
+    private var progress: CGFloat {
+        min(1, abs(dragOffset.width) / ReviewView.threshold)
+    }
+
+    var body: some View {
+        ZStack {
+            ForEach(items) { item in
+                card(item)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func card(_ item: Item) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 20)
+        AssetView(asset: item.asset, isActive: item.isTop)
+            .background(shape.fill(Color(white: 0.07)))
+            .clipShape(shape)
+            .overlay {
+                if item.isTop { SwipeStamp(offset: dragOffset, leftKeeps: model.swipeLeftKeeps) }
+            }
+            .scaleEffect(item.isTop ? 1 : 0.93 + 0.07 * progress)
+            .opacity(item.isTop ? 1 : 0.6 + 0.4 * Double(progress))
+            .rotationEffect(.degrees(item.isTop ? Double(dragOffset.width / 22) : 0), anchor: .bottom)
+            .offset(item.isTop ? dragOffset : .zero)
+            .allowsHitTesting(item.isTop)
+            .gesture(
+                DragGesture(minimumDistance: 12, coordinateSpace: .global)
+                    .onChanged { value in onDragChanged(value.translation) }
+                    .onEnded { value in onDragEnded(value.translation, value.predictedEndTranslation) },
+                including: item.isTop ? .all : .subviews
+            )
+    }
+}
+
+/// Farbiger Stempel „BEHALTEN“ / „LÖSCHEN“ beim Wischen.
+private struct SwipeStamp: View {
+    let offset: CGSize
+    let leftKeeps: Bool
+
+    var body: some View {
+        let amount = min(1, abs(offset.width) / ReviewView.threshold)
+        let draggedLeft = offset.width < 0
+        let keep = draggedLeft == leftKeeps
+        let color: Color = keep ? .green : .red
+        ZStack(alignment: draggedLeft ? .topTrailing : .topLeading) {
+            RoundedRectangle(cornerRadius: 20)
+                .fill(color.opacity(0.28 * Double(amount)))
+            Text(keep ? "BEHALTEN" : "LÖSCHEN")
+                .font(.system(size: 34, weight: .black))
+                .foregroundStyle(color)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(color, lineWidth: 4))
+                .rotationEffect(.degrees(draggedLeft ? 14 : -14))
+                .padding(28)
+        }
+        .opacity(offset.width == 0 ? 0 : Double(amount))
+        .allowsHitTesting(false)
     }
 }
 
@@ -190,6 +330,10 @@ private struct TopBar: View {
                         Label(filter.rawValue, systemImage: filter.icon).tag(filter)
                     }
                 }
+                Picker("Wischen", selection: $model.swipeLeftKeeps) {
+                    Label("← Behalten · Löschen →", systemImage: "hand.draw").tag(true)
+                    Label("← Löschen · Behalten →", systemImage: "hand.draw").tag(false)
+                }
                 Picker("Reihenfolge", selection: $model.oldestFirst) {
                     Label("Neueste zuerst", systemImage: "arrow.down").tag(false)
                     Label("Älteste zuerst", systemImage: "arrow.up").tag(true)
@@ -251,17 +395,18 @@ private struct InfoLine: View {
 
 private struct DecisionButtons: View {
     @EnvironmentObject private var model: LibraryModel
+    let isBusy: Bool
+    let decide: (Bool) -> Void
 
     var body: some View {
         let disabled = model.current == nil || model.isLoading
         HStack(spacing: 10) {
-            BigButton(title: "Behalten", icon: "checkmark", color: .green) {
-                haptic(.light)
-                model.keep()
-            }
-            BigButton(title: "Löschen", icon: "trash.fill", color: .red) {
-                haptic(.medium)
-                model.markForDeletion()
+            if model.swipeLeftKeeps {
+                keepButton
+                deleteButton
+            } else {
+                deleteButton
+                keepButton
             }
         }
         .padding(10)
@@ -270,8 +415,22 @@ private struct DecisionButtons: View {
                 .stroke(Color(red: 0.55, green: 0.08, blue: 0.12), lineWidth: 2)
         )
         .frame(height: 96)
-        .disabled(disabled)
+        .disabled(disabled || isBusy)
         .opacity(disabled ? 0.4 : 1)
+    }
+
+    private var keepButton: some View {
+        BigButton(title: "Behalten", icon: "checkmark", color: .green,
+                  arrowLeft: model.swipeLeftKeeps) {
+            decide(true)
+        }
+    }
+
+    private var deleteButton: some View {
+        BigButton(title: "Löschen", icon: "trash.fill", color: .red,
+                  arrowLeft: !model.swipeLeftKeeps) {
+            decide(false)
+        }
     }
 }
 
@@ -279,15 +438,22 @@ private struct BigButton: View {
     let title: String
     let icon: String
     let color: Color
+    /// Pfeil zeigt die Wischrichtung für diesen Knopf.
+    let arrowLeft: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                Text(title)
+            VStack(spacing: 2) {
+                HStack(spacing: 8) {
+                    Image(systemName: icon)
+                    Text(title)
+                }
+                .font(.title3.bold())
+                Text(arrowLeft ? "← wischen" : "wischen →")
+                    .font(.caption2)
+                    .opacity(0.8)
             }
-            .font(.title3.bold())
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .foregroundStyle(.white)
             .background(color.opacity(0.85), in: RoundedRectangle(cornerRadius: 14))

@@ -55,7 +55,13 @@ final class LibraryModel: ObservableObject {
         }
     }
 
+    /// true: nach links wischen = Behalten, nach rechts = Löschen.
+    @Published var swipeLeftKeeps: Bool {
+        didSet { defaults.set(swipeLeftKeeps, forKey: Keys.swipeLeftKeeps) }
+    }
+
     private enum Keys {
+        static let swipeLeftKeeps = "swipeLeftKeeps"
         static let kept = "keptIDs"
         static let marked = "markedIDs"
         static let filter = "filter"
@@ -92,6 +98,7 @@ final class LibraryModel: ObservableObject {
         keptIDs = Set(UserDefaults.standard.stringArray(forKey: Keys.kept) ?? [])
         filter = MediaFilter(rawValue: UserDefaults.standard.string(forKey: Keys.filter) ?? "") ?? .alle
         oldestFirst = UserDefaults.standard.object(forKey: Keys.oldestFirst) as? Bool ?? false
+        swipeLeftKeeps = UserDefaults.standard.object(forKey: Keys.swipeLeftKeeps) as? Bool ?? true
         freedBytesTotal = (UserDefaults.standard.object(forKey: Keys.freed) as? NSNumber)?.int64Value ?? 0
         if hasAccess {
             restoreMarked()
