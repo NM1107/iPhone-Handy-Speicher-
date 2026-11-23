@@ -85,6 +85,13 @@ def check(cond: bool, text: str, errors: list[str]) -> None:
 
 
 def run() -> int:
+    # Windows-Konsole (cp1252) kann nicht alle Zeichen – nie am Ausgeben scheitern
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
     errors: list[str] = []
     print("== Systemfunktionen ==")
     drives = winsys.fixed_drives()
