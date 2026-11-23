@@ -198,6 +198,54 @@ def run() -> int:
         except urllib.error.HTTPError as e:
             check(e.code == 404, "Keine Vorschau/Download für .exe", errors)
 
+        print("== Deinstallieren überspringen ==")
+        import subprocess
+        installed = {"k1": True, "k2": True, "k3": True}
+        procs = []
+
+        def fake_run(cmd):
+            if cmd == "haengt":   # wie ein Launcher, der auf eine Anmeldung wartet
+                proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+            else:
+                installed[cmd] = False
+                proc = subprocess.Popen([sys.executable, "-c", "pass"])
+            procs.append(proc)
+            return proc
+
+        orig = (winsys.run_uninstaller, winsys.program_still_installed)
+        winsys.run_uninstaller = fake_run
+        winsys.program_still_installed = lambda key: installed.get(key, False)
+        recs = [sc._register({"type": "program", "key": k, "name": n, "uninstall": u, "size": 1})
+                for k, n, u in (("k1", "Hängendes Spiel", "haengt"), ("k2", "Normales Spiel", "k2"),
+                                ("k3", "Noch ein hängendes", "haengt"))]
+
+        def wait_for(cond, seconds=15):
+            end = time.time() + seconds
+            while time.time() < end:
+                if cond():
+                    return True
+                time.sleep(0.2)
+            return False
+
+        post("/api/uninstall", {"ids": [r["id"] for r in recs]})
+        check(wait_for(lambda: app.uninstall_state["currentId"] == recs[0]["id"]), "Erstes Spiel wird deinstalliert", errors)
+        time.sleep(1.5)
+        check(app.uninstall_state["currentId"] == recs[0]["id"], "…und hängt (wartet auf Anmeldung)", errors)
+        post("/api/uninstall/skip", {"id": recs[1]["id"]})   # falsche ID: darf nichts tun
+        time.sleep(0.8)
+        check(app.uninstall_state["currentId"] == recs[0]["id"], "Überspringen mit veralteter ID wird ignoriert", errors)
+        post("/api/uninstall/skip", {"id": recs[0]["id"]})
+        check(wait_for(lambda: app.uninstall_state["currentId"] == recs[2]["id"]), "Überspringen → weiter, normales Spiel läuft durch", errors)
+        post("/api/uninstall/stop", {})
+        check(wait_for(lambda: not app.uninstall_state["running"]), "„Alle restlichen abbrechen“ beendet die Schleife", errors)
+        u = app.uninstall_state
+        check(u["done"] == [recs[1]["id"]] and sorted(u["skipped"]) == sorted([recs[0]["id"], recs[2]["id"]]),
+              f"Ergebnis: deinstalliert {u['done']}, übersprungen {u['skipped']}", errors)
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()
+        winsys.run_uninstaller, winsys.program_still_installed = orig
+
         print("== Papierkorb ==")
         ids = [items["setup_tool.exe"]["id"], items["Lebenslauf (Kopie).pdf"]["id"]]
         res = post("/api/trash", {"ids": ids})

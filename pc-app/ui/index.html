@@ -645,15 +645,52 @@ async function execute(){
     }
   }
   let removedProgs = 0;
+  let skippedNames = [];
   if (progs.length){
     $("#work").textContent = "Spiele & Programme werden deinstalliert …";
+    // Knöpfe einmal anlegen (nicht bei jeder Aktualisierung neu)
+    const box = document.createElement("div");
+    box.className = "stack";
+    box.style.gap = "10px";
+    box.style.width = "100%";
+    box.innerHTML = `<div class="row">
+        <button class="btn" id="skipone" disabled>Überspringen – weiter zum nächsten</button>
+        <button class="btn ghost" id="stopall">Alle restlichen abbrechen</button>
+      </div>
+      <span class="muted" style="font-size:13px;line-height:1.5">Hängt es, z. B. weil ein Launcher eine Anmeldung will? Dann einfach „Überspringen“. Das Spiel bleibt installiert und du kannst das offene Fenster selbst schließen.</span>`;
+    $("#workinfo").after(box);
+    let currentId = 0;
+    $("#skipone").onclick = async () => {
+      if (!currentId) return;
+      $("#skipone").disabled = true;
+      $("#skipone").textContent = "Wird übersprungen …";
+      await api("/api/uninstall/skip", {id: currentId}).catch(() => {});
+    };
+    $("#stopall").onclick = async () => {
+      if (!(await confirmBox({title: "Alle restlichen abbrechen?", text: "Das aktuelle und alle weiteren Spiele/Programme werden nicht deinstalliert. Sie bleiben einfach auf dem PC.", ok: "Abbrechen", cancel: "Weiter deinstallieren"}))) return;
+      $("#stopall").disabled = true;
+      $("#skipone").disabled = true;
+      await api("/api/uninstall/stop", {}).catch(() => {});
+    };
     await api("/api/uninstall", {ids: progs.map((p) => p.id)});
     while (true){
-      await new Promise((r) => setTimeout(r, 1500));
-      const st = await refreshState();
+      await new Promise((r) => setTimeout(r, 1000));
+      let st;
+      try { st = await refreshState(); } catch (e) { continue; }
       const u = st.uninstall;
+      if (u.currentId !== currentId){
+        currentId = u.currentId;
+        const sk = $("#skipone");
+        if (sk){ sk.disabled = !currentId; sk.textContent = "Überspringen – weiter zum nächsten"; }
+      }
       $("#workinfo").innerHTML = u.current ? `Gerade: <b>${esc(u.current)}</b> – bestätige das Deinstallations-Fenster.<br>Noch ${u.left} übrig.` : "";
-      if (!u.running){ removedProgs = u.done.length; u.done.forEach((id) => S.marked.delete(id)); break; }
+      if (!u.running){
+        removedProgs = u.done.length;
+        u.done.forEach((id) => S.marked.delete(id));
+        skippedNames = u.skipped.map((id) => (S.marked.get(id) || {}).name).filter(Boolean);
+        box.remove();
+        break;
+      }
     }
   }
   const progFreed = progs.filter((p) => !S.marked.has(p.id)).reduce((a, p) => a + p.size, 0);
@@ -668,7 +705,7 @@ async function execute(){
   }
   await refreshState();
   S.freedTotal += freedFiles + progFreed;
-  renderDone({freedFiles, progFreed, removedProgs, failed, binEmptied: binEmpty, progsTotal: progs.length});
+  renderDone({freedFiles, progFreed, removedProgs, failed, binEmptied: binEmpty, progsTotal: progs.length, skippedNames});
 }
 
 function renderDone(r){
@@ -680,7 +717,7 @@ function renderDone(r){
       <h1>Fertig – ${fmt(r.freedFiles + r.progFreed)} aufgeräumt</h1>
       ${disk ? `<span style="font-size:18px">Jetzt frei auf ${esc(disk.root.replace("\\",""))}: <b style="color:var(--green)">${esc(disk.freeText)}</b></span>` : ""}
       ${!r.binEmptied ? `<span class="muted">Der Papierkorb ist noch voll – der Platz wird erst frei, wenn du ihn leerst.</span><button class="btn" id="emptybin">Papierkorb jetzt leeren</button>` : ""}
-      ${r.progsTotal && r.removedProgs < r.progsTotal ? `<span class="muted">${r.progsTotal - r.removedProgs} Programm(e) wurden nicht deinstalliert (Fenster abgebrochen?). Sie bleiben markiert.</span>` : ""}
+      ${r.progsTotal && r.removedProgs < r.progsTotal ? `<span class="muted" style="max-width:640px;line-height:1.5">Übersprungen oder abgebrochen – bleiben installiert: ${(r.skippedNames || []).length ? esc(r.skippedNames.join(", ")) : `${r.progsTotal - r.removedProgs} Programm(e)`}. Sie stehen weiter auf deiner Liste und du kannst es später nochmal versuchen.</span>` : ""}
       ${r.failed.length ? `<details style="text-align:left;max-width:100%"><summary class="muted">${r.failed.length} Datei(en) konnten nicht gelöscht werden</summary><ul class="muted">${r.failed.map((f) => `<li>${esc(f.name)} – ${esc(f.reason)}</li>`).join("")}</ul></details>` : ""}
       <div class="row" style="justify-content:center;margin-top:8px">
         <button class="btn primary big" id="again">Weiter aufräumen</button>

@@ -37,7 +37,10 @@ class App:
         self.junk_cache: dict | None = None
         self.junk_lock = threading.Lock()
         self.uninstall_queue: list[int] = []
-        self.uninstall_state = {"running": False, "current": "", "done": [], "left": 0}
+        self.uninstall_state = {"running": False, "current": "", "currentId": 0, "done": [],
+                                "skipped": [], "left": 0}
+        self.uninstall_skip = threading.Event()   # aktuelles überspringen
+        self.uninstall_stop = threading.Event()   # alle restlichen abbrechen
 
     # -------------------------------------------------- Daten
 
@@ -83,28 +86,46 @@ class App:
         records = [r for r in records if r and r["type"] == "program"]
         if not records or self.uninstall_state["running"]:
             return
-        self.uninstall_state = {"running": True, "current": "", "done": [], "left": len(records)}
+        self.uninstall_skip.clear()
+        self.uninstall_stop.clear()
+        self.uninstall_state = {"running": True, "current": "", "currentId": 0, "done": [],
+                                "skipped": [], "left": len(records)}
+
+        def interrupted() -> bool:
+            return self.uninstall_skip.is_set() or self.uninstall_stop.is_set()
 
         def worker():
             for rec in records:
+                if self.uninstall_stop.is_set():
+                    self.uninstall_state["skipped"].append(rec["id"])
+                    self.uninstall_state["left"] -= 1
+                    continue
+                self.uninstall_skip.clear()
                 self.uninstall_state["current"] = rec["name"]
+                self.uninstall_state["currentId"] = rec["id"]
                 try:
                     proc = winsys.run_uninstaller(rec["uninstall"])
-                    if proc is not None:
-                        proc.wait()
                 except Exception:  # noqa: BLE001
-                    pass
-                # Manche Deinstaller laufen im Hintergrund weiter – kurz warten
-                for _ in range(60):
-                    if not winsys.program_still_installed(rec["key"]):
-                        break
-                    time.sleep(2)
+                    proc = None
+                # Warten, bis das Deinstallations-Fenster fertig ist – oder übersprungen wird.
+                # Der Deinstaller wird dabei NICHT abgeschossen (das könnte etwas kaputt machen).
+                while proc is not None and proc.poll() is None and not interrupted():
+                    time.sleep(0.4)
+                # Manche Deinstaller (Launcher) laufen im Hintergrund weiter – bis 2 Min. warten
+                deadline = time.time() + 120
+                while (not interrupted() and time.time() < deadline
+                       and winsys.program_still_installed(rec["key"])):
+                    time.sleep(1)
                 if not winsys.program_still_installed(rec["key"]):
                     self.scanner.mark_program_removed(rec["id"])
                     self.uninstall_state["done"].append(rec["id"])
+                else:
+                    self.uninstall_state["skipped"].append(rec["id"])
                 self.uninstall_state["left"] -= 1
+            self.uninstall_skip.clear()
             self.uninstall_state["running"] = False
             self.uninstall_state["current"] = ""
+            self.uninstall_state["currentId"] = 0
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -291,6 +312,14 @@ def make_handler(app: App):
                 self._send_json(result)
             elif url.path == "/api/uninstall":
                 app.start_uninstalls(ids)
+                self._send_json({"ok": True})
+            elif url.path == "/api/uninstall/skip":
+                # nur überspringen, wenn es noch dasselbe Programm ist (kein Doppelklick-Effekt)
+                if item_id and item_id == app.uninstall_state.get("currentId"):
+                    app.uninstall_skip.set()
+                self._send_json({"ok": True})
+            elif url.path == "/api/uninstall/stop":
+                app.uninstall_stop.set()
                 self._send_json({"ok": True})
             elif url.path == "/api/open":
                 rec = scanner.by_id.get(item_id)
