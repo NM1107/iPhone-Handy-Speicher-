@@ -28,6 +28,7 @@ jobs:
         run: python -m pip install --upgrade pip send2trash pyinstaller
 
       - name: Selbsttest (Python, echtes Windows)
+        timeout-minutes: 8
         run: python main.py --selftest
 
       - name: "Echter Scan der Festplatte C:"
@@ -44,6 +45,7 @@ jobs:
           main.py
 
       - name: Selbsttest mit der fertigen EXE
+        timeout-minutes: 8
         shell: pwsh
         run: |
           $p = Start-Process -FilePath "dist\PC-Aufraeumen.exe" -ArgumentList "--selftest" -Wait -PassThru

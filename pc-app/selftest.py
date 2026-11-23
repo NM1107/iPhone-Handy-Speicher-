@@ -210,12 +210,18 @@ def run() -> int:
         installed = {"k1": True, "k2": True, "k3": True}
         procs = []
 
+        def helper(seconds: int) -> list[str]:
+            # Neutrales Kommando – NICHT sys.executable (in der .exe wäre das die App selbst)
+            if sys.platform == "win32":
+                return ["cmd", "/c", f"ping -n {seconds + 1} 127.0.0.1 >nul"]
+            return ["sleep", str(seconds)]
+
         def fake_run(cmd):
             if cmd == "haengt":   # wie ein Launcher, der auf eine Anmeldung wartet
-                proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+                proc = subprocess.Popen(helper(60), creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             else:
                 installed[cmd] = False
-                proc = subprocess.Popen([sys.executable, "-c", "pass"])
+                proc = subprocess.Popen(helper(0), creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             procs.append(proc)
             return proc
 
@@ -250,7 +256,11 @@ def run() -> int:
               f"Ergebnis: deinstalliert {u['done']}, übersprungen {u['skipped']}", errors)
         for proc in procs:
             if proc.poll() is None:
-                proc.kill()
+                if sys.platform == "win32":
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                else:
+                    proc.kill()
         winsys.run_uninstaller, winsys.program_still_installed = orig
 
         print("== Papierkorb ==")
